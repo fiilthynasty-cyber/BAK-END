@@ -148,6 +148,66 @@ class AppRoutesTestCase(unittest.TestCase):
         self.assertEqual(len(payload["telemetry"]["rounds"]), 2)
         self.assertIn("subscriber_fit_score", payload["leads"][0])
         self.assertIn("subscriber_signals", payload["leads"][0])
+        self.assertIn("subscriber_tier", payload["leads"][0])
+        self.assertIn("next_action", payload["leads"][0])
+
+    @patch("app.fetch_indiehackers_rss")
+    @patch("app.fetch_hn")
+    @patch("app.fetch_reddit")
+    def test_subscriber_engine_source_balancing(self, mock_reddit, mock_hn, mock_ih):
+        mock_reddit.return_value = [
+            {
+                "title": "newsletter subscribers wanted",
+                "url": "https://reddit.com/1",
+                "deep_link": "https://reddit.com/1",
+                "snippet": "grow subscribers",
+                "source": "reddit",
+                "created_at_iso": "2025-01-01T00:00:00+00:00",
+                "meta": {},
+            },
+            {
+                "title": "email list growth",
+                "url": "https://reddit.com/2",
+                "deep_link": "https://reddit.com/2",
+                "snippet": "need more followers",
+                "source": "reddit",
+                "created_at_iso": "2025-01-01T00:00:00+00:00",
+                "meta": {},
+            },
+        ]
+        mock_hn.return_value = [
+            {
+                "title": "launching with waitlist",
+                "url": "https://hn.com/1",
+                "deep_link": "https://hn.com/1",
+                "snippet": "building audience",
+                "source": "hn",
+                "created_at_iso": "2025-01-01T00:00:00+00:00",
+                "meta": {},
+            }
+        ]
+        mock_ih.return_value = []
+
+        response = self.client.post(
+            "/api/subscriberEngine",
+            json={
+                "keywords": ["newsletter"],
+                "max_queries": 1,
+                "min_score": 1,
+                "limit": 10,
+                "max_per_source": 1,
+            },
+        )
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["status"], "success")
+
+        source_counts = {}
+        for lead in payload["leads"]:
+            source = lead.get("source")
+            source_counts[source] = source_counts.get(source, 0) + 1
+
+        self.assertLessEqual(source_counts.get("reddit", 0), 1)
 
     def test_subscriber_engine_requires_keywords(self):
         response = self.client.post("/api/subscriberEngine", json={"keywords": []})

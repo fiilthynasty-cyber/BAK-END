@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -11,14 +12,6 @@ from flask_cors import CORS
 from logic.query_builder import CompanyProfile, build_queries
 from logic.scoring import score_lead
 from logic.sources import fetch_hn, fetch_indiehackers_rss, fetch_reddit
-
-DEFAULT_LEAD = {
-    "id": 1,
-    "title": "Example Lead",
-    "content": "This is a test lead",
-    "score": 85,
-    "intent": "high",
-}
 
 DEFAULT_ANALYSIS = {
     "score": 92,
@@ -43,6 +36,8 @@ SUBSCRIBER_SIGNALS = {
     "launch": 6,
     "waitlist": 10,
     "email list": 11,
+    "creator": 8,
+    "growth": 7,
 }
 
 
@@ -100,6 +95,30 @@ def _bucket_intent(score: int) -> str:
     return "low"
 
 
+def _subscriber_tier(score: int) -> str:
+    if score >= 90:
+        return "elite"
+    if score >= 75:
+        return "strong"
+    if score >= 60:
+        return "watch"
+    return "low"
+
+
+def _next_action_from_signals(signals: list[str]) -> str:
+    lookup = {
+        "newsletter": "Offer a fast newsletter growth teardown.",
+        "waitlist": "Share a waitlist-to-customer conversion playbook.",
+        "email list": "Lead with list cleaning + activation strategy.",
+        "subscribers": "Pitch subscriber acquisition experiments.",
+        "community": "Position around community-led onboarding loops.",
+    }
+    for signal in signals:
+        if signal in lookup:
+            return lookup[signal]
+    return "Open with a short intent-based question and share one concrete growth idea."
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -139,6 +158,17 @@ def _score_subscriber_fit(lead: dict[str, Any]) -> tuple[int, list[str]]:
     return fit_score, matched_signals
 
 
+def _enrich_subscriber_lead(lead: dict[str, Any]) -> dict[str, Any]:
+    fit_score, signals = _score_subscriber_fit(lead)
+    return {
+        **lead,
+        "subscriber_fit_score": fit_score,
+        "subscriber_tier": _subscriber_tier(fit_score),
+        "subscriber_signals": signals,
+        "next_action": _next_action_from_signals(signals),
+    }
+
+
 def _evolve_keywords(seed_keywords: list[str], leads: list[dict[str, Any]], cap: int = 12) -> list[str]:
     ranked = sorted(leads, key=lambda row: row.get("subscriber_fit_score", 0), reverse=True)
     output: list[str] = []
@@ -161,6 +191,30 @@ def _evolve_keywords(seed_keywords: list[str], leads: list[dict[str, Any]], cap:
                 return output
 
     return output
+
+
+def _balance_by_source(leads: list[dict[str, Any]], *, max_per_source: int, limit: int) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    output: list[dict[str, Any]] = []
+
+    for lead in leads:
+        source = lead.get("source") or "unknown"
+        current = counts.get(source, 0)
+        if current >= max_per_source:
+            continue
+        counts[source] = current + 1
+        output.append(lead)
+        if len(output) >= limit:
+            break
+
+    return output
+
+
+def _top_signals(leads: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    counter: Counter[str] = Counter()
+    for lead in leads:
+        counter.update(lead.get("subscriber_signals", []))
+    return [{"signal": key, "count": value} for key, value in counter.most_common(limit)]
 
 
 def generate_ranked_leads(
@@ -230,6 +284,8 @@ def run_autonomous_subscriber_engine(
     max_queries: int,
     min_score: int,
     rounds: int,
+    max_per_source: int,
+    output_limit: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rounds = max(1, min(5, rounds))
 
@@ -252,13 +308,7 @@ def run_autonomous_subscriber_engine(
         errors.extend(lead_errors)
 
         for lead in leads:
-            fit_score, signals = _score_subscriber_fit(lead)
-            enriched = {
-                **lead,
-                "subscriber_fit_score": fit_score,
-                "subscriber_signals": signals,
-            }
-
+            enriched = _enrich_subscriber_lead(lead)
             unique_key = enriched.get("post_url") or enriched.get("external_url") or enriched.get("title")
             existing = collected.get(unique_key)
             if not existing or enriched["subscriber_fit_score"] > existing.get("subscriber_fit_score", 0):
@@ -266,21 +316,27 @@ def run_autonomous_subscriber_engine(
 
         round_leads = sorted(collected.values(), key=lambda row: row["subscriber_fit_score"], reverse=True)
         keyword_plan = _evolve_keywords(keyword_plan, round_leads)
+        avg_fit = int(sum(row.get("subscriber_fit_score", 0) for row in round_leads) / len(round_leads)) if round_leads else 0
 
         telemetry_rounds.append({
             "round": cycle,
             "keywords": keyword_plan,
             "lead_pool": len(round_leads),
+            "avg_fit_score": avg_fit,
+            "top_signals": _top_signals(round_leads, limit=5),
         })
 
     final_ranked = sorted(collected.values(), key=lambda row: row["subscriber_fit_score"], reverse=True)
+    balanced = _balance_by_source(final_ranked, max_per_source=max_per_source, limit=output_limit)
+
     telemetry = {
         "rounds": telemetry_rounds,
         "source_totals": source_totals,
         "errors": errors[:20],
         "keywords_final": keyword_plan,
+        "top_signals": _top_signals(final_ranked),
     }
-    return final_ranked, telemetry
+    return balanced, telemetry
 
 
 def _read_generation_request() -> tuple[list[str], int, int, int, int | None]:
@@ -289,7 +345,6 @@ def _read_generation_request() -> tuple[list[str], int, int, int, int | None]:
     raw_keywords = payload.get("keywords") if payload else query_keywords
     keywords = _normalize_keywords(raw_keywords)
 
-    # POST body takes precedence over query args when provided.
     if payload.get("keywords") is not None:
         keywords = _normalize_keywords(payload.get("keywords"))
 
@@ -377,27 +432,32 @@ def create_app() -> Flask:
         payload = request.get_json(silent=True) or {}
         keywords, per_source_limit, max_queries, min_score, limit = _read_generation_request()
         rounds = _parse_limit(payload.get("rounds"), max_value=5) or 3
+        max_per_source = _parse_limit(
+            payload.get("max_per_source") if payload.get("max_per_source") is not None else request.args.get("max_per_source"),
+            max_value=50,
+        ) or 10
 
         if not keywords:
             return _error("`keywords` must be a non-empty string array or comma-separated query string.")
 
+        output_limit = limit or 30
         leads, telemetry = run_autonomous_subscriber_engine(
             keywords=keywords,
             per_source_limit=per_source_limit,
             max_queries=max_queries,
             min_score=min_score,
             rounds=rounds,
+            max_per_source=max_per_source,
+            output_limit=output_limit,
         )
-
-        if limit is None:
-            limit = 30
 
         return _success({
             "engine": "autonomous_subscriber_engine",
             "rounds": rounds,
-            "count": min(len(leads), limit),
+            "max_per_source": max_per_source,
+            "count": len(leads),
             "telemetry": telemetry,
-            "leads": leads[:limit],
+            "leads": leads,
         })
 
     @app.post("/api/analyzeLead")
