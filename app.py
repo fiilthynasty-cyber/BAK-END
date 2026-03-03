@@ -38,6 +38,54 @@ def receive_data():
     })
 
 # -------------------
+# GET LEADS
+# -------------------
+@app.route("/api/getLeads", methods=["POST"])
+def get_leads():
+    data = request.json
+
+    return jsonify({
+        "status": "success",
+        "leads": [
+            {
+                "id": 1,
+                "title": "Example Lead",
+                "content": "This is a test lead",
+                "score": 85,
+                "intent": "high"
+            }
+        ]
+    })
+
+# -------------------
+# ANALYZE LEAD
+# -------------------
+@app.route("/api/analyzeLead", methods=["POST"])
+def analyze_lead():
+    data = request.json
+
+    return jsonify({
+        "status": "success",
+        "analysis": {
+            "score": 92,
+            "intent": "high",
+            "reason": "Contains buying signals"
+        }
+    })
+
+# -------------------
+# UPDATE LEAD
+# -------------------
+@app.route("/api/updateLead", methods=["POST"])
+def update_lead():
+    data = request.json
+
+    return jsonify({
+        "status": "success",
+        "message": "Lead updated successfully"
+    })
+
+# -------------------
 # REQUIRED FOR RENDER
 # -------------------
 if __name__ == "__main__":
