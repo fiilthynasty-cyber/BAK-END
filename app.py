@@ -66,7 +66,13 @@ def update_lead():
         "status": "success",
         "message": "Lead updated successfully"
     })
-
+# -------------------
+# HEALTH CHECK
+# -------------------
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "healthy"})
+    
 # -------------------
 # REQUIRED FOR RENDER
 # -------------------
