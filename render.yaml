@@ -1,0 +1,8 @@
+﻿services:
+  - type: web
+    name: intentflow-backend
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --config gunicorn_conf.py
+    autoDeploy: true
