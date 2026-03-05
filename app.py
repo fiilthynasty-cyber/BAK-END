@@ -35,15 +35,27 @@ def create_lead():
     if not data.get('business_name') or not data.get('url') or not data.get('score'):
         return jsonify({"message": "Missing required fields"}), 400
 
+    # Validate score is a number between 0 and 100
+    try:
+        score = float(data['score'])
+        if not (0 <= score <= 100):
+            return jsonify({"message": "Score must be between 0 and 100"}), 400
+    except ValueError:
+        return jsonify({"message": "Score must be a valid number"}), 400
+
     new_lead = Lead(
         business_name=data['business_name'],
         url=data['url'],
-        score=data['score'],
+        score=score,
         status="New"
     )
-    db.session.add(new_lead)
-    db.session.commit()
-    return jsonify({"message": "Lead created successfully!"}), 201
+    try:
+        db.session.add(new_lead)
+        db.session.commit()
+        return jsonify({"message": "Lead created successfully!"}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Error creating lead: {str(e)}"}), 500
 
 @app.route('/leads', methods=['GET'])
 def get_all_leads():
@@ -73,19 +85,29 @@ def update_lead(lead_id):
     lead = Lead.query.get_or_404(lead_id)
     lead.status = data.get('status', lead.status)
     lead.last_interaction = data.get('last_interaction', lead.last_interaction)
+
+    # Generate personalized message using OpenAI API
     lead.personalized_message = generate_personalized_message(lead.url)
-    db.session.commit()
-    return jsonify({"message": "Lead updated successfully!"})
+
+    try:
+        db.session.commit()
+        return jsonify({"message": "Lead updated successfully!"})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Error updating lead: {str(e)}"}), 500
 
 # Function to generate personalized message using OpenAI
 def generate_personalized_message(url):
     prompt = f"Generate a personalized message for a business based on the following URL: {url}. Include a call to action for potential clients."
-    response = openai.Completion.create(
-        model="text-davinci-003",
-        prompt=prompt,
-        max_tokens=100
-    )
-    return response.choices[0].text.strip()
+    try:
+        response = openai.Completion.create(
+            model="text-davinci-003",
+            prompt=prompt,
+            max_tokens=100
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        return f"Error generating message: {str(e)}"
 
 if __name__ == '__main__':
     app.run(debug=True)
