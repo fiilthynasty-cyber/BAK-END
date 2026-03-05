@@ -1,0 +1,2 @@
+WORKER_CONCURRENCY = 2
+QUEUE_BACKEND = "redis://localhost:6379/0"
