@@ -1,113 +1,43 @@
-from flask import Flask, jsonify, request
+# app.py
+
+from flask import Flask, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-import openai
-import os
 
+# Initialize Flask app
 app = Flask(__name__)
+
+# Enable Cross-Origin Resource Sharing (CORS)
 CORS(app)
 
-# Load environment variables for sensitive info (e.g., database URI and OpenAI API key)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL", "postgresql://your_db_url_here")
+# Configure your database URI (replace with your actual URI)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://username:password@host:port/database_name'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Initialize the database
 db = SQLAlchemy(app)
 
-# OpenAI API key setup
-openai.api_key = os.getenv("OPENAI_API_KEY", "your-openai-api-key")
-
-# Lead Model
+# Example model (replace with your actual models)
 class Lead(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     business_name = db.Column(db.String(100), nullable=False)
     url = db.Column(db.String(255), nullable=False)
     score = db.Column(db.Float, nullable=False)
-    status = db.Column(db.String(50), default="New")
-    last_interaction = db.Column(db.String(255), nullable=True)
-    personalized_message = db.Column(db.String(255), nullable=True)
 
     def __repr__(self):
         return f"<Lead {self.business_name}>"
 
-@app.route('/leads', methods=['POST'])
-def create_lead():
-    data = request.json
-    if not data.get('business_name') or not data.get('url') or not data.get('score'):
-        return jsonify({"message": "Missing required fields"}), 400
+# Simple route for testing
+@app.route('/')
+def hello_world():
+    return jsonify(message="Hello, World!")
 
-    # Validate score is a number between 0 and 100
-    try:
-        score = float(data['score'])
-        if not (0 <= score <= 100):
-            return jsonify({"message": "Score must be between 0 and 100"}), 400
-    except ValueError:
-        return jsonify({"message": "Score must be a valid number"}), 400
-
-    new_lead = Lead(
-        business_name=data['business_name'],
-        url=data['url'],
-        score=score,
-        status="New"
-    )
-    try:
-        db.session.add(new_lead)
-        db.session.commit()
-        return jsonify({"message": "Lead created successfully!"}), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"message": f"Error creating lead: {str(e)}"}), 500
-
-@app.route('/leads', methods=['GET'])
-def get_all_leads():
+# Example route to get all leads from the database (if you have any data)
+@app.route('/leads')
+def get_leads():
     leads = Lead.query.all()
-    return jsonify([{
-        "business_name": lead.business_name,
-        "url": lead.url,
-        "score": lead.score,
-        "status": lead.status,
-        "last_interaction": lead.last_interaction
-    } for lead in leads])
+    return jsonify([lead.business_name for lead in leads])
 
-@app.route('/lead/<int:lead_id>', methods=['GET'])
-def get_lead(lead_id):
-    lead = Lead.query.get_or_404(lead_id)
-    return jsonify({
-        "business_name": lead.business_name,
-        "url": lead.url,
-        "score": lead.score,
-        "status": lead.status,
-        "personalized_message": lead.personalized_message
-    })
-
-@app.route('/lead/<int:lead_id>', methods=['PUT'])
-def update_lead(lead_id):
-    data = request.json
-    lead = Lead.query.get_or_404(lead_id)
-    lead.status = data.get('status', lead.status)
-    lead.last_interaction = data.get('last_interaction', lead.last_interaction)
-
-    # Generate personalized message using OpenAI API
-    lead.personalized_message = generate_personalized_message(lead.url)
-
-    try:
-        db.session.commit()
-        return jsonify({"message": "Lead updated successfully!"})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"message": f"Error updating lead: {str(e)}"}), 500
-
-# Function to generate personalized message using OpenAI
-def generate_personalized_message(url):
-    prompt = f"Generate a personalized message for a business based on the following URL: {url}. Include a call to action for potential clients."
-    try:
-        response = openai.Completion.create(
-            model="text-davinci-003",
-            prompt=prompt,
-            max_tokens=100
-        )
-        return response.choices[0].text.strip()
-    except Exception as e:
-        return f"Error generating message: {str(e)}"
-
-if __name__ == '__main__':
+# If running locally, run the Flask app directly (optional)
+if __name__ == "__main__":
     app.run(debug=True)
